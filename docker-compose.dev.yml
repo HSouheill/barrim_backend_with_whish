@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: barrim-redis-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_dev_data:/data
+    networks:
+      - barrim-dev-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mongodb:
+    image: mongo:8.0
+    container_name: barrim-mongodb-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=9Z9ZBarrim
+      - MONGO_INITDB_DATABASE=barrim
+    volumes:
+      - mongodb_dev_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
+    networks:
+      - barrim-dev-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: barrim-backend-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - MONGO_URI=mongodb://admin:9Z9ZBarrim@mongodb:27017/?authSource=admin
+      - DB_NAME=barrim
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - GIN_MODE=debug
+      - PORT=8080
+      - JWT_SECRET=dev-jwt-secret-key-change-in-production
+      - ENV=development
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks:
+      - barrim-dev-network
+    volumes:
+      - .:/app
+      - /app/tmp
+      - /app/go/pkg/mod
+      - uploads_dev_data:/app/uploads
+    stdin_open: true
+    tty: true
+
+volumes:
+  redis_dev_data:
+    driver: local
+  mongodb_dev_data:
+    driver: local
+  uploads_dev_data:
+    driver: local
+
+networks:
+  barrim-dev-network:
+    driver: bridge
