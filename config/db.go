@@ -21,13 +21,36 @@ func ConnectDB() *mongo.Client {
 		mongoURI = os.Getenv("MONGODB_URI")
 	}
 
-	// Only use Docker service name as fallback in development
+	// Only use Docker service name as fallback in explicit local development
+	// On cloud platforms (Render, Heroku, etc.), always require MONGO_URI/MONGODB_URI
 	if mongoURI == "" {
 		env := os.Getenv("ENV")
-		if env == "development" || env == "dev" {
+
+		// Check for cloud platform indicators
+		// Render and most cloud platforms set PORT and other indicators
+		port := os.Getenv("PORT")
+		isCloud := os.Getenv("RENDER_SERVICE_ID") != "" || // Render
+			os.Getenv("RENDER") != "" || // Render (fallback)
+			os.Getenv("DYNO") != "" || // Heroku
+			os.Getenv("VERCEL") != "" || // Vercel
+			os.Getenv("AWS_EXECUTION_ENV") != "" // AWS Lambda
+
+		// If PORT is set (cloud platforms always set this), require MONGO_URI unless explicitly in dev
+		// PORT being set without ENV=development is a strong indicator of cloud deployment
+		if port != "" && env != "development" && env != "dev" {
+			isCloud = true
+		}
+
+		// Only use Docker fallback if explicitly in local development AND not on cloud
+		if !isCloud && (env == "development" || env == "dev") {
+			log.Println("Warning: Using Docker service name fallback for MongoDB. Set MONGO_URI or MONGODB_URI for production.")
 			mongoURI = "mongodb://admin:9Z9ZBarrim@mongodb:27017/?authSource=admin"
 		} else {
-			log.Fatal("MONGO_URI or MONGODB_URI environment variable is required for production")
+			if isCloud {
+				log.Fatal("MONGO_URI or MONGODB_URI environment variable is required for cloud deployment. Please set it in your service environment variables.")
+			} else {
+				log.Fatal("MONGO_URI or MONGODB_URI environment variable is required. Set ENV=development for local Docker development.")
+			}
 		}
 	}
 
