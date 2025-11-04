@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,11 +15,24 @@ import (
 
 // ConnectDB establishes connection to MongoDB
 func ConnectDB() *mongo.Client {
-	// Set client options
+	// Set client options - check both MONGO_URI and MONGODB_URI
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
-		mongoURI = "mongodb://admin:9Z9ZBarrim@mongodb:27017/?authSource=admin"
+		mongoURI = os.Getenv("MONGODB_URI")
 	}
+
+	// Only use Docker service name as fallback in development
+	if mongoURI == "" {
+		env := os.Getenv("ENV")
+		if env == "development" || env == "dev" {
+			mongoURI = "mongodb://admin:9Z9ZBarrim@mongodb:27017/?authSource=admin"
+		} else {
+			log.Fatal("MONGO_URI or MONGODB_URI environment variable is required for production")
+		}
+	}
+
+	// Log connection URI (without password for security)
+	log.Printf("Connecting to MongoDB at: %s", maskMongoURI(mongoURI))
 
 	clientOptions := options.Client().ApplyURI(mongoURI)
 
@@ -99,4 +113,16 @@ func setupCollections(client *mongo.Client) {
 	}
 
 	log.Println("Database collections and indexes setup complete")
+}
+
+// maskMongoURI masks the password in MongoDB URI for logging
+func maskMongoURI(uri string) string {
+	// Simple masking - replace password with ***
+	// Format: mongodb://username:password@host:port/...
+	if idx := strings.Index(uri, "@"); idx > 0 {
+		if colonIdx := strings.LastIndex(uri[:idx], ":"); colonIdx > 0 {
+			return uri[:colonIdx+1] + "***" + uri[idx:]
+		}
+	}
+	return uri
 }
