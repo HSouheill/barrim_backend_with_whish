@@ -28,6 +28,14 @@ func RegisterCompanyRoutes(e *echo.Echo, companyController *controllers.CompanyC
 	companyGroup.POST("/sponsorship/:branchId/request", companyController.CreateCompanyBranchSponsorshipRequest)
 	companyGroup.GET("/sponsorship/:branchId/remaining-time", companyController.GetCompanyBranchSponsorshipRemainingTime)
 
+	// Whish payment callback routes for sponsorship (public - no auth required for Whish callbacks)
+	e.GET("/api/whish/company-branch/sponsorship/payment/callback/success", func(c echo.Context) error {
+		return companyController.HandleWhishSponsorshipPaymentSuccess(c)
+	})
+	e.GET("/api/whish/company-branch/sponsorship/payment/callback/failure", func(c echo.Context) error {
+		return companyController.HandleWhishSponsorshipPaymentFailure(c)
+	})
+
 	// Test route to check if company routes are working
 	companyGroup.GET("/test", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{

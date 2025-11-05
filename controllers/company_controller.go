@@ -25,6 +25,7 @@ import (
 	"github.com/HSouheill/barrim_backend/config"
 	"github.com/HSouheill/barrim_backend/middleware"
 	"github.com/HSouheill/barrim_backend/models"
+	"github.com/HSouheill/barrim_backend/services"
 	"github.com/HSouheill/barrim_backend/utils"
 	"github.com/google/uuid"
 )
@@ -2533,7 +2534,7 @@ func (cc *CompanyController) CreateCompanyBranchSponsorshipRequest(c echo.Contex
 		"sponsorshipId": req.SponsorshipID,
 		"entityId":      branchObjectID,
 		"entityType":    "company_branch",
-		"status":        "pending",
+		"status":        bson.M{"$in": []string{"pending", "pending_payment"}},
 	}).Decode(&existingRequest)
 	if err == nil {
 		return c.JSON(http.StatusConflict, models.Response{
@@ -2542,6 +2543,9 @@ func (cc *CompanyController) CreateCompanyBranchSponsorshipRequest(c echo.Contex
 		})
 	}
 
+	// Generate external ID for Whish payment (using timestamp-based unique ID)
+	externalID := time.Now().UnixNano() / int64(time.Millisecond)
+
 	// Create sponsorship subscription request
 	subscriptionRequest := models.SponsorshipSubscriptionRequest{
 		ID:            primitive.NewObjectID(),
@@ -2549,26 +2553,83 @@ func (cc *CompanyController) CreateCompanyBranchSponsorshipRequest(c echo.Contex
 		EntityType:    "company_branch",
 		EntityID:      branchObjectID,
 		EntityName:    fmt.Sprintf("%s - %s", company.BusinessName, branch.Name),
-		Status:        "pending",
+		Status:        "pending_payment",
 		RequestedAt:   time.Now(),
 		AdminNote:     req.AdminNote,
+		ExternalID:    externalID,
+		PaymentStatus: "pending",
 	}
 
-	// Save the sponsorship subscription request
+	// Get base URL for callback URLs (backend API)
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://barrim.online" // Default fallback
+	}
+
+	// Get app URL for user redirects (frontend/mobile app)
+	appURL := os.Getenv("APP_URL")
+	if appURL == "" {
+		appURL = "barrim://payment"
+	}
+
+	// Initialize Whish service
+	whishService := services.NewWhishService()
+
+	// Check Whish merchant account balance to verify account is active
+	whishBalance, err := whishService.GetBalance()
+	if err != nil {
+		log.Printf("Warning: Could not check Whish account balance: %v", err)
+		// Continue anyway - balance check failure doesn't block payment creation
+	} else {
+		log.Printf("Whish merchant account balance: $%.2f", whishBalance)
+		if whishBalance < 0 {
+			log.Printf("Warning: Whish account has negative balance: $%.2f", whishBalance)
+		}
+	}
+
+	// Create Whish payment request
+	whishReq := models.WhishRequest{
+		Amount:             &sponsorship.Price,
+		Currency:           "USD", // Use USD for sponsorship payments
+		Invoice:            fmt.Sprintf("Company Branch Sponsorship - %s - %s - Sponsorship: %s", company.BusinessName, branch.Name, sponsorship.Title),
+		ExternalID:         &externalID,
+		SuccessCallbackURL: fmt.Sprintf("%s/api/whish/company-branch/sponsorship/payment/callback/success", baseURL),
+		FailureCallbackURL: fmt.Sprintf("%s/api/whish/company-branch/sponsorship/payment/callback/failure", baseURL),
+		SuccessRedirectURL: fmt.Sprintf("%s/payment-success?requestId=%s", appURL, subscriptionRequest.ID.Hex()),
+		FailureRedirectURL: fmt.Sprintf("%s/payment-failed?requestId=%s", appURL, subscriptionRequest.ID.Hex()),
+	}
+
+	// Call Whish API to create payment
+	collectURL, err := whishService.PostPayment(whishReq)
+	if err != nil {
+		log.Printf("Failed to create Whish payment: %v", err)
+		return c.JSON(http.StatusInternalServerError, models.Response{
+			Status:  http.StatusInternalServerError,
+			Message: fmt.Sprintf("Failed to initiate payment: %v", err),
+		})
+	}
+
+	// Save collectUrl to subscription request
+	subscriptionRequest.CollectURL = collectURL
+
+	// Save the sponsorship subscription request to database
 	_, err = existingRequestCollection.InsertOne(ctx, subscriptionRequest)
 	if err != nil {
+		log.Printf("Failed to save sponsorship subscription request: %v", err)
 		return c.JSON(http.StatusInternalServerError, models.Response{
 			Status:  http.StatusInternalServerError,
 			Message: "Failed to create sponsorship subscription request",
 		})
 	}
 
+	log.Printf("Whish payment created for company branch sponsorship request %s: %s", subscriptionRequest.ID.Hex(), collectURL)
+
 	// Send notification to admin (optional)
 	adminEmail := os.Getenv("ADMIN_EMAIL")
 	if adminEmail != "" {
 		subject := "New Company Branch Sponsorship Request"
-		body := fmt.Sprintf("A new sponsorship request has been submitted by company: %s\nBranch: %s\nSponsorship: %s\nRequested At: %s\n",
-			company.BusinessName, branch.Name, sponsorship.Title, subscriptionRequest.RequestedAt.Format("2006-01-02 15:04:05"))
+		body := fmt.Sprintf("A new sponsorship request has been submitted by company: %s\nBranch: %s\nSponsorship: %s\nPrice: $%.2f\nRequested At: %s\n",
+			company.BusinessName, branch.Name, sponsorship.Title, sponsorship.Price, subscriptionRequest.RequestedAt.Format("2006-01-02 15:04:05"))
 
 		// For now, just log the notification since we don't have email functionality in company controller
 		log.Printf("Admin notification (to %s): %s - %s", adminEmail, subject, body)
@@ -2576,7 +2637,7 @@ func (cc *CompanyController) CreateCompanyBranchSponsorshipRequest(c echo.Contex
 
 	return c.JSON(http.StatusCreated, models.Response{
 		Status:  http.StatusCreated,
-		Message: "Sponsorship subscription request created successfully. Waiting for admin approval.",
+		Message: "Sponsorship subscription request created successfully. Please complete the payment.",
 		Data: map[string]interface{}{
 			"requestId":   subscriptionRequest.ID,
 			"sponsorship": sponsorship,
@@ -2585,8 +2646,198 @@ func (cc *CompanyController) CreateCompanyBranchSponsorshipRequest(c echo.Contex
 			"status":      subscriptionRequest.Status,
 			"submittedAt": subscriptionRequest.RequestedAt,
 			"adminNote":   subscriptionRequest.AdminNote,
+			"paymentUrl":  collectURL,
+			"price":       sponsorship.Price,
 		},
 	})
+}
+
+// HandleWhishSponsorshipPaymentSuccess handles Whish payment success callback for company branch sponsorship
+func (cc *CompanyController) HandleWhishSponsorshipPaymentSuccess(c echo.Context) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	log.Printf("==========================================")
+	log.Printf("💰 COMPANY SPONSORSHIP PAYMENT CALLBACK RECEIVED")
+	log.Printf("==========================================")
+
+	// Get externalId from query parameters (Whish sends it as GET parameter)
+	externalIDStr := c.QueryParam("externalId")
+	if externalIDStr == "" {
+		log.Printf("❌ PAYMENT FAILED: Missing externalId in Whish sponsorship success callback")
+		return c.String(http.StatusBadRequest, "Missing externalId parameter")
+	}
+
+	externalID, err := strconv.ParseInt(externalIDStr, 10, 64)
+	if err != nil {
+		log.Printf("❌ PAYMENT FAILED: Invalid externalId in callback: %v", err)
+		return c.String(http.StatusBadRequest, "Invalid externalId")
+	}
+
+	log.Printf("📋 Processing payment for externalId: %d", externalID)
+
+	// Find the sponsorship subscription request by externalId
+	db := cc.DB.Database("barrim")
+	requestCollection := db.Collection("sponsorship_subscription_requests")
+	var subscriptionRequest models.SponsorshipSubscriptionRequest
+	err = requestCollection.FindOne(ctx, bson.M{"externalId": externalID}).Decode(&subscriptionRequest)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			log.Printf("Sponsorship subscription request not found for externalId: %d", externalID)
+			return c.String(http.StatusNotFound, "Sponsorship subscription request not found")
+		}
+		log.Printf("Error finding sponsorship subscription request: %v", err)
+		return c.String(http.StatusInternalServerError, "Database error")
+	}
+
+	// Check if already processed
+	if subscriptionRequest.PaymentStatus == "success" || subscriptionRequest.Status == "approved" || subscriptionRequest.Status == "active" {
+		log.Printf("Payment already processed for sponsorship request: %s", subscriptionRequest.ID.Hex())
+		return c.String(http.StatusOK, "Payment already processed")
+	}
+
+	// Initialize Whish service and verify payment status
+	whishService := services.NewWhishService()
+	status, phoneNumber, err := whishService.GetPaymentStatus("USD", externalID)
+	if err != nil {
+		log.Printf("Failed to verify payment status: %v", err)
+		return c.String(http.StatusInternalServerError, "Failed to verify payment")
+	}
+
+	if status != "success" {
+		log.Printf("❌ PAYMENT FAILED: Payment not successful, status: %s", status)
+		log.Printf("   Request ID: %s", subscriptionRequest.ID.Hex())
+		log.Printf("   Entity: %s (%s)", subscriptionRequest.EntityName, subscriptionRequest.EntityType)
+		// Update request status to failed
+		requestCollection.UpdateOne(ctx,
+			bson.M{"_id": subscriptionRequest.ID},
+			bson.M{"$set": bson.M{
+				"paymentStatus": "failed",
+				"status":        "failed",
+				"processedAt":   time.Now(),
+			}})
+		log.Printf("==========================================")
+		return c.String(http.StatusBadRequest, "Payment not successful")
+	}
+
+	// Payment verified successfully - activate subscription immediately
+	// Get sponsorship details
+	sponsorshipCollection := db.Collection("sponsorships")
+	var sponsorship models.Sponsorship
+	err = sponsorshipCollection.FindOne(ctx, bson.M{"_id": subscriptionRequest.SponsorshipID}).Decode(&sponsorship)
+	if err != nil {
+		log.Printf("Failed to get sponsorship details: %v", err)
+		return c.String(http.StatusInternalServerError, "Failed to get sponsorship details")
+	}
+
+	// Add sponsorship income to admin wallet using sponsorship subscription controller
+	sponsorshipSubscriptionController := NewSponsorshipSubscriptionController(db)
+	err = sponsorshipSubscriptionController.addSponsorshipIncomeToAdminWallet(
+		ctx,
+		sponsorship.Price,
+		subscriptionRequest.SponsorshipID,
+		fmt.Sprintf("%s - %s", sponsorship.Title, subscriptionRequest.EntityName),
+	)
+	if err != nil {
+		log.Printf("Failed to add sponsorship income to admin wallet: %v", err)
+		// Don't fail the payment if wallet update fails, but log it
+	}
+
+	// Create active subscription immediately after payment
+	err = sponsorshipSubscriptionController.createActiveSubscription(ctx, subscriptionRequest)
+	if err != nil {
+		log.Printf("Failed to create active subscription: %v", err)
+		return c.String(http.StatusInternalServerError, "Failed to activate subscription")
+	}
+
+	// Update entity sponsorship status to active
+	err = sponsorshipSubscriptionController.updateEntitySponsorshipStatus(ctx, subscriptionRequest.EntityType, subscriptionRequest.EntityID, true)
+	if err != nil {
+		log.Printf("Failed to update entity sponsorship status: %v", err)
+		// Don't fail the process if status update fails, but log it
+	}
+
+	// Update request status - mark as approved/active after payment
+	update := bson.M{
+		"$set": bson.M{
+			"paymentStatus": "success",
+			"status":        "approved",
+			"adminApproved": true,
+			"approvedAt":    time.Now(),
+			"paidAt":        time.Now(),
+			"processedAt":   time.Now(),
+		},
+	}
+
+	_, err = requestCollection.UpdateOne(ctx, bson.M{"_id": subscriptionRequest.ID}, update)
+	if err != nil {
+		log.Printf("Failed to update sponsorship subscription request status: %v", err)
+		return c.String(http.StatusInternalServerError, "Failed to update request status")
+	}
+
+	log.Printf("✅ PAYMENT SUCCESS: Company branch sponsorship payment completed and activated")
+	log.Printf("   Request ID: %s", subscriptionRequest.ID.Hex())
+	log.Printf("   External ID: %d", externalID)
+	log.Printf("   Entity: %s (%s)", subscriptionRequest.EntityName, subscriptionRequest.EntityType)
+	log.Printf("   Amount: $%.2f", sponsorship.Price)
+	log.Printf("   Phone: %s", phoneNumber)
+	log.Printf("   Sponsorship: %s", sponsorship.Title)
+	log.Printf("   Status: Activated")
+	log.Printf("==========================================")
+	return c.String(http.StatusOK, "Payment successful and sponsorship activated.")
+}
+
+// HandleWhishSponsorshipPaymentFailure handles Whish payment failure callback for company branch sponsorship
+func (cc *CompanyController) HandleWhishSponsorshipPaymentFailure(c echo.Context) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	log.Printf("==========================================")
+	log.Printf("❌ COMPANY SPONSORSHIP PAYMENT FAILURE CALLBACK RECEIVED")
+	log.Printf("==========================================")
+
+	externalIDStr := c.QueryParam("externalId")
+	if externalIDStr == "" {
+		log.Printf("❌ PAYMENT FAILED: Missing externalId parameter in failure callback")
+		return c.String(http.StatusBadRequest, "Missing externalId parameter")
+	}
+
+	externalID, err := strconv.ParseInt(externalIDStr, 10, 64)
+	if err != nil {
+		log.Printf("❌ PAYMENT FAILED: Invalid externalId: %v", err)
+		return c.String(http.StatusBadRequest, "Invalid externalId")
+	}
+
+	log.Printf("📋 Processing payment failure for externalId: %d", externalID)
+
+	// Update sponsorship subscription request status to failed
+	db := cc.DB.Database("barrim")
+	requestCollection := db.Collection("sponsorship_subscription_requests")
+	var subscriptionRequest models.SponsorshipSubscriptionRequest
+	err = requestCollection.FindOne(ctx, bson.M{"externalId": externalID}).Decode(&subscriptionRequest)
+	if err == nil {
+		log.Printf("   Request ID: %s", subscriptionRequest.ID.Hex())
+		log.Printf("   Entity: %s (%s)", subscriptionRequest.EntityName, subscriptionRequest.EntityType)
+	}
+
+	_, err = requestCollection.UpdateOne(ctx,
+		bson.M{"externalId": externalID},
+		bson.M{"$set": bson.M{
+			"paymentStatus": "failed",
+			"status":        "failed",
+			"processedAt":   time.Now(),
+		}})
+
+	if err != nil {
+		log.Printf("❌ PAYMENT FAILED: Error updating request status: %v", err)
+		return c.String(http.StatusInternalServerError, "Failed to update status")
+	}
+
+	log.Printf("❌ PAYMENT FAILED: Company sponsorship payment failed")
+	log.Printf("   External ID: %d", externalID)
+	log.Printf("   Status: Marked as failed in database")
+	log.Printf("==========================================")
+	return c.String(http.StatusOK, "Payment failure recorded")
 }
 
 // GetCompanyBranchSponsorshipRemainingTime gets the remaining time for a company branch's sponsorship subscription

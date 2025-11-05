@@ -60,6 +60,12 @@ services:
       - PORT=8080
       - JWT_SECRET=${JWT_SECRET}
       - FIREBASE_CREDENTIALS_BASE64=${FIREBASE_CREDENTIALS_BASE64}
+      - WHISH_ENV=${WHISH_ENV:-production}
+      - WHISH_CHANNEL=${WHISH_CHANNEL}
+      - WHISH_SECRET=${WHISH_SECRET}
+      - WHISH_WEBSITE_URL=${WHISH_WEBSITE_URL}
+      - BASE_URL=${BASE_URL}
+      - APP_URL=${APP_URL}
     depends_on:
       redis:
         condition: service_healthy

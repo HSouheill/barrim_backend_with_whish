@@ -5,7 +5,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -15,47 +14,11 @@ import (
 
 // ConnectDB establishes connection to MongoDB
 func ConnectDB() *mongo.Client {
-	// Set client options - check both MONGO_URI and MONGODB_URI
+	// Set client options
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
-		mongoURI = os.Getenv("MONGODB_URI")
+		mongoURI = "mongodb://admin:9Z9ZBarrim@mongodb:27017/?authSource=admin"
 	}
-
-	// Only use Docker service name as fallback in explicit local development
-	// On cloud platforms (Render, Heroku, etc.), always require MONGO_URI/MONGODB_URI
-	if mongoURI == "" {
-		env := os.Getenv("ENV")
-
-		// Check for cloud platform indicators
-		// Render and most cloud platforms set PORT and other indicators
-		port := os.Getenv("PORT")
-		isCloud := os.Getenv("RENDER_SERVICE_ID") != "" || // Render
-			os.Getenv("RENDER") != "" || // Render (fallback)
-			os.Getenv("DYNO") != "" || // Heroku
-			os.Getenv("VERCEL") != "" || // Vercel
-			os.Getenv("AWS_EXECUTION_ENV") != "" // AWS Lambda
-
-		// If PORT is set (cloud platforms always set this), require MONGO_URI unless explicitly in dev
-		// PORT being set without ENV=development is a strong indicator of cloud deployment
-		if port != "" && env != "development" && env != "dev" {
-			isCloud = true
-		}
-
-		// Only use Docker fallback if explicitly in local development AND not on cloud
-		if !isCloud && (env == "development" || env == "dev") {
-			log.Println("Warning: Using Docker service name fallback for MongoDB. Set MONGO_URI or MONGODB_URI for production.")
-			mongoURI = "mongodb://admin:9Z9ZBarrim@mongodb:27017/?authSource=admin"
-		} else {
-			if isCloud {
-				log.Fatal("MONGO_URI or MONGODB_URI environment variable is required for cloud deployment. Please set it in your service environment variables.")
-			} else {
-				log.Fatal("MONGO_URI or MONGODB_URI environment variable is required. Set ENV=development for local Docker development.")
-			}
-		}
-	}
-
-	// Log connection URI (without password for security)
-	log.Printf("Connecting to MongoDB at: %s", maskMongoURI(mongoURI))
 
 	clientOptions := options.Client().ApplyURI(mongoURI)
 
@@ -136,16 +99,4 @@ func setupCollections(client *mongo.Client) {
 	}
 
 	log.Println("Database collections and indexes setup complete")
-}
-
-// maskMongoURI masks the password in MongoDB URI for logging
-func maskMongoURI(uri string) string {
-	// Simple masking - replace password with ***
-	// Format: mongodb://username:password@host:port/...
-	if idx := strings.Index(uri, "@"); idx > 0 {
-		if colonIdx := strings.LastIndex(uri[:idx], ":"); colonIdx > 0 {
-			return uri[:colonIdx+1] + "***" + uri[idx:]
-		}
-	}
-	return uri
 }

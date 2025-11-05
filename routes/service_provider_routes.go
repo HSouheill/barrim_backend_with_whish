@@ -152,6 +152,19 @@ func RegisterServiceProviderRoutes(e *echo.Echo, db *mongo.Database, serviceProv
 	})
 	log.Println("Registered /api/whish/service-provider/payment/callback/failure endpoint")
 
+	// Whish payment callback routes for sponsorship (public - no auth required for Whish callbacks)
+	e.GET("/api/whish/service-provider/sponsorship/payment/callback/success", func(c echo.Context) error {
+		log.Printf("Received Whish sponsorship payment success callback for service provider from %s", c.Request().RemoteAddr)
+		return serviceProviderSubscriptionController.HandleWhishSponsorshipPaymentSuccess(c)
+	})
+	log.Println("Registered /api/whish/service-provider/sponsorship/payment/callback/success endpoint")
+
+	e.GET("/api/whish/service-provider/sponsorship/payment/callback/failure", func(c echo.Context) error {
+		log.Printf("Received Whish sponsorship payment failure callback for service provider from %s", c.Request().RemoteAddr)
+		return serviceProviderSubscriptionController.HandleWhishSponsorshipPaymentFailure(c)
+	})
+	log.Println("Registered /api/whish/service-provider/sponsorship/payment/callback/failure endpoint")
+
 	// Admin/Manager routes for toggling any service provider status
 	adminGroup := serviceProvider.Group("/admin")
 	adminGroup.Use(middleware.JWTMiddleware())

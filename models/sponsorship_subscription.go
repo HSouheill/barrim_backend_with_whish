@@ -10,13 +10,13 @@ import (
 type SponsorshipSubscription struct {
 	ID              primitive.ObjectID `json:"id,omitempty" bson:"_id,omitempty"`
 	SponsorshipID   primitive.ObjectID `json:"sponsorshipId" bson:"sponsorshipId"`     // Reference to the sponsorship
-	EntityType      string             `json:"entityType" bson:"entityType"`             // "service_provider", "company_branch", "wholesaler_branch"
-	EntityID        primitive.ObjectID `json:"entityId" bson:"entityId"`                 // ID of the service provider or branch
-	StartDate       time.Time          `json:"startDate" bson:"startDate"`               // When the subscription becomes active
-	EndDate         time.Time          `json:"endDate" bson:"endDate"`                   // When the subscription expires
-	Status          string             `json:"status" bson:"status"`                     // "active", "expired", "cancelled"
-	AutoRenew       bool               `json:"autoRenew" bson:"autoRenew"`               // Whether to auto-renew
-	DiscountApplied float64            `json:"discountApplied" bson:"discountApplied"`   // Actual discount applied
+	EntityType      string             `json:"entityType" bson:"entityType"`           // "service_provider", "company_branch", "wholesaler_branch"
+	EntityID        primitive.ObjectID `json:"entityId" bson:"entityId"`               // ID of the service provider or branch
+	StartDate       time.Time          `json:"startDate" bson:"startDate"`             // When the subscription becomes active
+	EndDate         time.Time          `json:"endDate" bson:"endDate"`                 // When the subscription expires
+	Status          string             `json:"status" bson:"status"`                   // "active", "expired", "cancelled"
+	AutoRenew       bool               `json:"autoRenew" bson:"autoRenew"`             // Whether to auto-renew
+	DiscountApplied float64            `json:"discountApplied" bson:"discountApplied"` // Actual discount applied
 	CreatedAt       time.Time          `json:"createdAt" bson:"createdAt"`
 	UpdatedAt       time.Time          `json:"updatedAt" bson:"updatedAt"`
 }
@@ -24,11 +24,11 @@ type SponsorshipSubscription struct {
 // SponsorshipSubscriptionRequest represents a pending subscription request that needs admin approval
 type SponsorshipSubscriptionRequest struct {
 	ID              primitive.ObjectID `json:"id,omitempty" bson:"_id,omitempty"`
-	SponsorshipID   primitive.ObjectID `json:"sponsorshipId" bson:"sponsorshipId"`     // Reference to the sponsorship
-	EntityType      string             `json:"entityType" bson:"entityType"`             // "service_provider", "company_branch", "wholesaler_branch"
-	EntityID        primitive.ObjectID `json:"entityId" bson:"entityId"`                 // ID of the service provider or branch
-	EntityName      string             `json:"entityName" bson:"entityName"`             // Name of the entity for display
-	Status          string             `json:"status" bson:"status"`                     // "pending", "approved", "rejected"
+	SponsorshipID   primitive.ObjectID `json:"sponsorshipId" bson:"sponsorshipId"` // Reference to the sponsorship
+	EntityType      string             `json:"entityType" bson:"entityType"`       // "service_provider", "company_branch", "wholesaler_branch"
+	EntityID        primitive.ObjectID `json:"entityId" bson:"entityId"`           // ID of the service provider or branch
+	EntityName      string             `json:"entityName" bson:"entityName"`       // Name of the entity for display
+	Status          string             `json:"status" bson:"status"`               // "pending", "pending_payment", "approved", "rejected", "active"
 	AdminNote       string             `json:"adminNote,omitempty" bson:"adminNote,omitempty"`
 	ManagerNote     string             `json:"managerNote,omitempty" bson:"managerNote,omitempty"`
 	AdminApproved   *bool              `json:"adminApproved,omitempty" bson:"adminApproved,omitempty"`
@@ -39,6 +39,11 @@ type SponsorshipSubscriptionRequest struct {
 	RejectedAt      time.Time          `json:"rejectedAt,omitempty" bson:"rejectedAt,omitempty"`
 	RequestedAt     time.Time          `json:"requestedAt" bson:"requestedAt"`
 	ProcessedAt     time.Time          `json:"processedAt,omitempty" bson:"processedAt,omitempty"`
+	// Whish payment fields
+	ExternalID    int64     `json:"externalId,omitempty" bson:"externalId,omitempty"`       // Whish payment external ID
+	PaymentStatus string    `json:"paymentStatus,omitempty" bson:"paymentStatus,omitempty"` // "pending", "success", "failed"
+	CollectURL    string    `json:"collectUrl,omitempty" bson:"collectUrl,omitempty"`       // Whish payment URL
+	PaidAt        time.Time `json:"paidAt,omitempty" bson:"paidAt,omitempty"`
 }
 
 // SponsorshipSubscriptionApprovalRequest represents the request body for approving/rejecting subscriptions

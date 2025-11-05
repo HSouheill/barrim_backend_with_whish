@@ -24,19 +24,24 @@ type WhishService struct {
 
 // NewWhishService creates a new Whish service instance
 func NewWhishService() *WhishService {
-	// Use testing/sandbox Whish API
-	isTesting := true
-	baseURL := "https://api.sandbox.whish.money/itel-service/api/"
-	log.Println("Whish Service: Using TESTING/SANDBOX API - https://api.sandbox.whish.money/itel-service/api/")
+	// Determine environment (testing or production)
+	// Default to production unless WHISH_ENV is set to "testing"
+	whishEnv := os.Getenv("WHISH_ENV")
+	isTesting := whishEnv == "testing"
+
+	var baseURL string
+	if isTesting {
+		baseURL = "https://api.sandbox.whish.money/itel-service/api/"
+		log.Println("Whish Service: Using TESTING/SANDBOX API - https://api.sandbox.whish.money/itel-service/api/")
+	} else {
+		baseURL = "https://api.whish.money/itel-service/api/"
+		log.Println("Whish Service: Using PRODUCTION API - https://api.whish.money/itel-service/api/")
+	}
 
 	// Get credentials from environment variables
-	// channel := os.Getenv("WHISH_CHANNEL")
-	// secret := os.Getenv("WHISH_SECRET")
-	// websiteURL := os.Getenv("WHISH_WEBSITE_URL")
-	channel := 10196975
-	secret := "024709627da343afbcd5278a5fea819e"
-	websiteUrl := "barrim.com"
-	channelStr := fmt.Sprintf("%d", channel)
+	channelStr := os.Getenv("WHISH_CHANNEL")
+	secret := os.Getenv("WHISH_SECRET")
+	websiteUrl := os.Getenv("WHISH_WEBSITE_URL")
 
 	// Validate required credentials
 	if channelStr == "" || secret == "" || websiteUrl == "" {
@@ -51,6 +56,7 @@ func NewWhishService() *WhishService {
 			log.Printf("  - WHISH_WEBSITE_URL is missing")
 		}
 		log.Printf("Please set these environment variables for Whish payment service to work")
+		log.Printf("Set WHISH_ENV=testing to use sandbox, or leave unset for production")
 	} else {
 		log.Printf("Whish Service Configuration:")
 		log.Printf("  Environment: %s", map[bool]string{true: "testing", false: "production"}[isTesting])

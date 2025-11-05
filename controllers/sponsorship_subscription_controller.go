@@ -352,7 +352,7 @@ func (ssc *SponsorshipSubscriptionController) ProcessSponsorshipSubscriptionRequ
 
 	// If approved, create the actual subscription and update entity sponsorship status
 	if req.Status == "approved" {
-		err = ssc.createActiveSubscription(subscriptionRequest)
+		err = ssc.createActiveSubscription(context.Background(), subscriptionRequest)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 				"success": false,
@@ -362,7 +362,7 @@ func (ssc *SponsorshipSubscriptionController) ProcessSponsorshipSubscriptionRequ
 		}
 
 		// Update entity sponsorship status to true
-		err = ssc.updateEntitySponsorshipStatus(subscriptionRequest.EntityType, subscriptionRequest.EntityID, true)
+		err = ssc.updateEntitySponsorshipStatus(context.Background(), subscriptionRequest.EntityType, subscriptionRequest.EntityID, true)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 				"success": false,
@@ -371,15 +371,20 @@ func (ssc *SponsorshipSubscriptionController) ProcessSponsorshipSubscriptionRequ
 			})
 		}
 
-		// Add sponsorship price to admin wallet
-		err = ssc.addSponsorshipToAdminWallet(subscriptionRequest.SponsorshipID)
-		if err != nil {
-			log.Printf("Warning: Failed to add sponsorship to admin wallet: %v", err)
-			// Don't fail the approval if wallet update fails
+		// Add sponsorship price to admin wallet only if payment hasn't been processed yet
+		// (Payment success callback already adds to wallet for paid requests)
+		if subscriptionRequest.PaymentStatus != "success" {
+			err = ssc.addSponsorshipToAdminWallet(subscriptionRequest.SponsorshipID)
+			if err != nil {
+				log.Printf("Warning: Failed to add sponsorship to admin wallet: %v", err)
+				// Don't fail the approval if wallet update fails
+			}
+		} else {
+			log.Printf("Skipping admin wallet addition - payment already processed and added to wallet")
 		}
 	} else {
 		// If rejected, update entity sponsorship status to false
-		err = ssc.updateEntitySponsorshipStatus(subscriptionRequest.EntityType, subscriptionRequest.EntityID, false)
+		err = ssc.updateEntitySponsorshipStatus(context.Background(), subscriptionRequest.EntityType, subscriptionRequest.EntityID, false)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 				"success": false,
@@ -1058,11 +1063,11 @@ func (ssc *SponsorshipSubscriptionController) getEntityDetails(entityType string
 }
 
 // Helper function to create active subscription
-func (ssc *SponsorshipSubscriptionController) createActiveSubscription(request models.SponsorshipSubscriptionRequest) error {
+func (ssc *SponsorshipSubscriptionController) createActiveSubscription(ctx context.Context, request models.SponsorshipSubscriptionRequest) error {
 	// Get sponsorship details
 	sponsorshipCollection := ssc.DB.Collection("sponsorships")
 	var sponsorship models.Sponsorship
-	err := sponsorshipCollection.FindOne(context.Background(), bson.M{"_id": request.SponsorshipID}).Decode(&sponsorship)
+	err := sponsorshipCollection.FindOne(ctx, bson.M{"_id": request.SponsorshipID}).Decode(&sponsorship)
 	if err != nil {
 		return err
 	}
@@ -1087,14 +1092,14 @@ func (ssc *SponsorshipSubscriptionController) createActiveSubscription(request m
 
 	// Insert into database
 	subscriptionCollection := ssc.DB.Collection("sponsorship_subscriptions")
-	_, err = subscriptionCollection.InsertOne(context.Background(), subscription)
+	_, err = subscriptionCollection.InsertOne(ctx, subscription)
 	if err != nil {
 		return err
 	}
 
 	// Update sponsorship used count
 	_, err = sponsorshipCollection.UpdateOne(
-		context.Background(),
+		ctx,
 		bson.M{"_id": request.SponsorshipID},
 		bson.M{"$inc": bson.M{"usedCount": 1}},
 	)
@@ -1117,7 +1122,7 @@ func (ssc *SponsorshipSubscriptionController) normalizeEntityType(entityType str
 }
 
 // Helper function to update entity sponsorship status
-func (ssc *SponsorshipSubscriptionController) updateEntitySponsorshipStatus(entityType string, entityID primitive.ObjectID, hasSponsorship bool) error {
+func (ssc *SponsorshipSubscriptionController) updateEntitySponsorshipStatus(ctx context.Context, entityType string, entityID primitive.ObjectID, hasSponsorship bool) error {
 	// Normalize entity type to handle both camelCase and snake_case formats
 	normalizedEntityType := ssc.normalizeEntityType(entityType)
 
@@ -1125,7 +1130,7 @@ func (ssc *SponsorshipSubscriptionController) updateEntitySponsorshipStatus(enti
 	case "service_provider":
 		// Update service provider sponsorship status
 		_, err := ssc.DB.Collection("serviceProviders").UpdateOne(
-			context.Background(),
+			ctx,
 			bson.M{"_id": entityID},
 			bson.M{"$set": bson.M{
 				"sponsorship": hasSponsorship,
@@ -1137,7 +1142,7 @@ func (ssc *SponsorshipSubscriptionController) updateEntitySponsorshipStatus(enti
 	case "company_branch":
 		// Update company branch sponsorship status
 		_, err := ssc.DB.Collection("companies").UpdateOne(
-			context.Background(),
+			ctx,
 			bson.M{"branches._id": entityID},
 			bson.M{"$set": bson.M{
 				"branches.$.sponsorship": hasSponsorship,
@@ -1149,7 +1154,7 @@ func (ssc *SponsorshipSubscriptionController) updateEntitySponsorshipStatus(enti
 	case "wholesaler_branch":
 		// Update wholesaler branch sponsorship status
 		_, err := ssc.DB.Collection("wholesalers").UpdateOne(
-			context.Background(),
+			ctx,
 			bson.M{"branches._id": entityID},
 			bson.M{"$set": bson.M{
 				"branches.$.sponsorship": hasSponsorship,
@@ -1166,24 +1171,79 @@ func (ssc *SponsorshipSubscriptionController) updateEntitySponsorshipStatus(enti
 // addSponsorshipToAdminWallet adds the sponsorship price to the admin wallet
 // This method creates a record of the sponsorship income for the admin wallet calculation
 func (ssc *SponsorshipSubscriptionController) addSponsorshipToAdminWallet(sponsorshipID primitive.ObjectID) error {
+	ctx := context.Background()
 	// Get sponsorship details to get the price
 	sponsorshipCollection := ssc.DB.Collection("sponsorships")
 	var sponsorship models.Sponsorship
-	err := sponsorshipCollection.FindOne(context.Background(), bson.M{"_id": sponsorshipID}).Decode(&sponsorship)
+	err := sponsorshipCollection.FindOne(ctx, bson.M{"_id": sponsorshipID}).Decode(&sponsorship)
 	if err != nil {
 		return fmt.Errorf("failed to get sponsorship details: %v", err)
 	}
 
-	// Create a sponsorship income record for admin wallet tracking
-	// This could be stored in a separate collection or used for analytics
-	// For now, we'll just log the income addition
-	log.Printf("Sponsorship income added to admin wallet: $%.2f from sponsorship '%s' (ID: %s)",
-		sponsorship.Price, sponsorship.Title, sponsorshipID.Hex())
+	return ssc.addSponsorshipIncomeToAdminWallet(ctx, sponsorship.Price, sponsorshipID, sponsorship.Title)
+}
 
-	// Note: The actual admin wallet calculation happens in real-time when GetAdminWallet is called
-	// This method ensures that the sponsorship subscription is properly recorded
-	// and will be included in the wallet calculation through the sponsorship_subscriptions collection
+// addSponsorshipIncomeToAdminWallet adds sponsorship income to the admin wallet
+func (ssc *SponsorshipSubscriptionController) addSponsorshipIncomeToAdminWallet(ctx context.Context, amount float64, entityID primitive.ObjectID, description string) error {
+	// Create admin wallet transaction
+	adminWalletTransaction := models.AdminWallet{
+		ID:          primitive.NewObjectID(),
+		Type:        "subscription_income", // Use subscription_income type for sponsorship income
+		Amount:      amount,
+		Description: fmt.Sprintf("Sponsorship income: %s", description),
+		EntityID:    entityID,
+		EntityType:  "sponsorship",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
 
+	// Insert the transaction
+	_, err := ssc.DB.Collection("admin_wallet").InsertOne(ctx, adminWalletTransaction)
+	if err != nil {
+		return fmt.Errorf("failed to insert admin wallet transaction: %w", err)
+	}
+
+	// Update or create admin wallet balance
+	balanceCollection := ssc.DB.Collection("admin_wallet_balance")
+
+	// Try to find existing balance record
+	var balance models.AdminWalletBalance
+	err = balanceCollection.FindOne(ctx, bson.M{}).Decode(&balance)
+
+	if err == mongo.ErrNoDocuments {
+		// Create new balance record
+		balance = models.AdminWalletBalance{
+			ID:                    primitive.NewObjectID(),
+			TotalIncome:           amount,
+			TotalWithdrawalIncome: 0,
+			TotalCommissionsPaid:  0,
+			NetBalance:            amount,
+			LastUpdated:           time.Now(),
+		}
+		_, err = balanceCollection.InsertOne(ctx, balance)
+		if err != nil {
+			return fmt.Errorf("failed to create admin wallet balance: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to find admin wallet balance: %w", err)
+	} else {
+		// Update existing balance record
+		update := bson.M{
+			"$inc": bson.M{
+				"totalIncome": amount,
+				"netBalance":  amount,
+			},
+			"$set": bson.M{
+				"lastUpdated": time.Now(),
+			},
+		}
+		_, err = balanceCollection.UpdateOne(ctx, bson.M{"_id": balance.ID}, update)
+		if err != nil {
+			return fmt.Errorf("failed to update admin wallet balance: %w", err)
+		}
+	}
+
+	log.Printf("Sponsorship income added to admin wallet: $%.2f - %s", amount, description)
 	return nil
 }
 

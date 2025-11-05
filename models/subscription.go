@@ -96,7 +96,7 @@ type SubscriptionPlan struct {
 // SubscriptionPlanRequest represents the request body for creating/updating subscription plans
 type SubscriptionPlanRequest struct {
 	Title    string      `json:"title" validate:"required"`
-	Price    float64     `json:"price" validate:"required,gt=0"`
+	Price    float64     `json:"price" validate:"required,gte=0"`
 	Duration int         `json:"duration" validate:"required,gt=0"`
 	Type     string      `json:"type" validate:"required,oneof=company wholesaler serviceProvider"`
 	Benefits interface{} `json:"benefits" validate:"required"`

@@ -223,25 +223,32 @@ func (sc *BranchSubscriptionController) CreateBranchSubscriptionRequest(c echo.C
 		})
 	}
 
-	// Create branch subscription request with pending_payment status
+	// Create branch subscription request
 	subscriptionRequest := models.BranchSubscriptionRequest{
-		ID:            primitive.NewObjectID(),
-		BranchID:      branch.ID,
-		PlanID:        planObjectID,
-		Status:        "pending_payment",
-		RequestedAt:   time.Now(),
-		PaymentStatus: "pending",
+		ID:          primitive.NewObjectID(),
+		BranchID:    branch.ID,
+		PlanID:      planObjectID,
+		RequestedAt: time.Now(),
 	}
 
 	// Generate externalId from ObjectID (use timestamp part as int64)
-	// Convert ObjectID to int64 by using the timestamp bytes
 	externalID := int64(subscriptionRequest.ID.Timestamp().Unix())
 	subscriptionRequest.ExternalID = externalID
+
+	// Create subscription request with pending_payment status
+	subscriptionRequest.Status = "pending_payment"
+	subscriptionRequest.PaymentStatus = "pending"
 
 	// Get base URL for callbacks
 	baseURL := os.Getenv("BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://barrim.online" // Default fallback
+	}
+
+	// Get app URL for redirects
+	appURL := os.Getenv("APP_URL")
+	if appURL == "" {
+		appURL = baseURL // Fallback to baseURL if APP_URL not set
 	}
 
 	// Initialize Whish service
@@ -258,11 +265,6 @@ func (sc *BranchSubscriptionController) CreateBranchSubscriptionRequest(c echo.C
 		// Optional: Validate account is active (negative balance might indicate issues)
 		if whishBalance < 0 {
 			log.Printf("Warning: Whish account has negative balance: $%.2f", whishBalance)
-			// You could return an error here if you want to block payments:
-			// return c.JSON(http.StatusServiceUnavailable, models.Response{
-			//     Status:  http.StatusServiceUnavailable,
-			//     Message: "Payment service temporarily unavailable. Please contact support.",
-			// })
 		}
 	}
 
@@ -274,8 +276,8 @@ func (sc *BranchSubscriptionController) CreateBranchSubscriptionRequest(c echo.C
 		ExternalID:         &externalID,
 		SuccessCallbackURL: fmt.Sprintf("%s/api/whish/payment/callback/success", baseURL),
 		FailureCallbackURL: fmt.Sprintf("%s/api/whish/payment/callback/failure", baseURL),
-		SuccessRedirectURL: fmt.Sprintf("%s/payment-success?requestId=%s", baseURL, subscriptionRequest.ID.Hex()),
-		FailureRedirectURL: fmt.Sprintf("%s/payment-failed?requestId=%s", baseURL, subscriptionRequest.ID.Hex()),
+		SuccessRedirectURL: fmt.Sprintf("%s/payment-success?requestId=%s", appURL, subscriptionRequest.ID.Hex()),
+		FailureRedirectURL: fmt.Sprintf("%s/payment-failed?requestId=%s", appURL, subscriptionRequest.ID.Hex()),
 	}
 
 	// Call Whish API to create payment
@@ -514,6 +516,17 @@ func (sc *BranchSubscriptionController) activateBranchSubscription(ctx context.C
 	)
 	if err != nil {
 		log.Printf("Failed to update branch status in companies: %v", err)
+	}
+
+	// Update user status to active when subscription is activated
+	usersCollection := sc.DB.Collection("users")
+	_, err = usersCollection.UpdateOne(
+		ctx,
+		bson.M{"_id": company.UserID},
+		bson.M{"$set": bson.M{"status": "active", "updatedAt": time.Now()}},
+	)
+	if err != nil {
+		log.Printf("Failed to update user status to active: %v", err)
 	}
 
 	// Handle commission and admin wallet (30% salesperson, 70% admin)

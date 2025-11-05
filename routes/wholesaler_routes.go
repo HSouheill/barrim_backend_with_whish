@@ -80,8 +80,21 @@ func RegisterWholesalerRoutes(e *echo.Echo, db *mongo.Database, wholesalerVouche
 	})
 	log.Println("Registered /api/whish/wholesaler-branch/payment/callback/failure endpoint")
 
+	// Whish payment callback routes for sponsorship (public - no auth required for Whish callbacks)
+	e.GET("/api/whish/wholesaler-branch/sponsorship/payment/callback/success", func(c echo.Context) error {
+		log.Printf("Received Whish sponsorship payment success callback for wholesaler branch from %s", c.Request().RemoteAddr)
+		return wholesalerBranchSubscriptionController.HandleWhishSponsorshipPaymentSuccess(c)
+	})
+	log.Println("Registered /api/whish/wholesaler-branch/sponsorship/payment/callback/success endpoint")
+
+	e.GET("/api/whish/wholesaler-branch/sponsorship/payment/callback/failure", func(c echo.Context) error {
+		log.Printf("Received Whish sponsorship payment failure callback for wholesaler branch from %s", c.Request().RemoteAddr)
+		return wholesalerBranchSubscriptionController.HandleWhishSponsorshipPaymentFailure(c)
+	})
+	log.Println("Registered /api/whish/wholesaler-branch/sponsorship/payment/callback/failure endpoint")
+
 	// ============= Voucher Routes =============
-	
+
 	// Wholesaler voucher routes
 	protected.GET("/vouchers/available", wholesalerVoucherController.GetAvailableVouchersForWholesaler)
 	protected.POST("/vouchers/purchase", wholesalerVoucherController.PurchaseVoucherForWholesaler)

@@ -1032,10 +1032,10 @@ func (sc *SubscriptionController) CreateSubscriptionPlan(c echo.Context) error {
 	}
 
 	// Validate required fields
-	if req.Title == "" || req.Price <= 0 || req.Duration <= 0 {
+	if req.Title == "" || req.Price < 0 || req.Duration <= 0 {
 		return c.JSON(http.StatusBadRequest, models.Response{
 			Status:  http.StatusBadRequest,
-			Message: "Missing required fields: title, price, and duration are required",
+			Message: "Missing required fields: title, price, and duration are required. Price must be 0 or greater.",
 		})
 	}
 
