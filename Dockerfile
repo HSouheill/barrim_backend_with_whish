@@ -1,20 +1,37 @@
-FROM alpine:latest
+# Development Dockerfile for Barrim Backend
+FROM golang:1.23.1-alpine AS development
 
-# Install ca-certificates for HTTPS requests, curl for health checks, and redis-cli for debugging
-RUN apk --no-cache add ca-certificates curl tzdata redis
+# Install development tools and dependencies
+RUN apk --no-cache add \
+    ca-certificates \
+    curl \
+    git \
+    make \
+    bash \
+    tzdata \
+    redis \
+    mongodb-tools
 
+# Install air for hot reloading (compatible with Go 1.23)
+RUN go install github.com/cosmtrek/air@v1.49.0
+
+# Create app directory
 WORKDIR /app
 
-# Create non-root user
+# Create non-root user for development
 RUN addgroup -g 1001 -S appuser && \
     adduser -S appuser -u 1001
 
-# Copy pre-built binary into the image
-COPY barrim_backend ./barrim_backend
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
 
-# Firebase credentials will be provided via environment variables
+# Download dependencies
+RUN go mod download
 
-# Create upload directories
+# Copy source code
+COPY . .
+
+# Create upload directories with proper permissions
 RUN mkdir -p /app/uploads/bookings \
     /app/uploads/category \
     /app/uploads/certificates \
@@ -23,14 +40,17 @@ RUN mkdir -p /app/uploads/bookings \
     /app/uploads/logos \
     /app/uploads/videos \
     /app/uploads/profiles \
-    /app/uploads/serviceprovider
+    /app/uploads/serviceprovider \
+    /app/uploads/vouchers
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
 
+# Switch to non-root user
 USER appuser
 
 # Expose port 8080
 EXPOSE 8080
 
-CMD ["./barrim_backend"]
+# Use air for hot reloading in development
+CMD ["air", "-c", ".air.toml"]
