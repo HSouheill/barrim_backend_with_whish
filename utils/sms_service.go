@@ -51,7 +51,7 @@ func (s *SMSService) SendOTP(phoneNumber, otp string) error {
 	params.Set("senderid", s.SenderID)
 	params.Set("destination", phoneNumber)
 	params.Set("message", otp)
-	params.Set("route", "sms") // Changed from "wp" to "sms" for regular SMS
+	params.Set("route", "wp") // wp = WhatsApp route
 	params.Set("template", "otp")
 	params.Set("variables", otp)
 
@@ -69,7 +69,7 @@ func (s *SMSService) SendOTP(phoneNumber, otp string) error {
 	req.Header.Set("User-Agent", "Barrim-OTP-Service/1.0")
 
 	// Log the request for debugging
-	fmt.Printf("📤 Sending SMS to: %s | Route: sms | OTP: %s\n", phoneNumber, otp)
+	fmt.Printf("📤 Sending OTP via WhatsApp to: %s | Route: wp | OTP: %s\n", phoneNumber, otp)
 	fmt.Printf("🔗 API URL: %s\n", fullURL)
 
 	// Send the request
