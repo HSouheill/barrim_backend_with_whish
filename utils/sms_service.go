@@ -44,39 +44,43 @@ func NewSMSService() *SMSService {
 
 // SendOTP sends an OTP via SMS using BestSMSBulk API
 func (s *SMSService) SendOTP(phoneNumber, otp string) error {
-	// Prepare query parameters
-	params := url.Values{}
-	params.Set("username", s.Username)
-	params.Set("password", s.Password)
-	params.Set("senderid", s.SenderID)
-	params.Set("destination", phoneNumber)
-	params.Set("message", otp)
-	params.Set("route", "wp") // wp = WhatsApp route
-	params.Set("template", "otp")
-	params.Set("variables", otp)
+	// Remove + sign from phone number if present (BestSMSBulk expects format without +)
+	destination := strings.TrimPrefix(phoneNumber, "+")
+	
+	// Prepare form data (application/x-www-form-urlencoded)
+	formData := url.Values{}
+	formData.Set("username", s.Username)
+	formData.Set("password", s.Password)
+	formData.Set("destination", destination)
+	formData.Set("message", otp)
+	formData.Set("route", "wp") // wp = WhatsApp route
 
-	// Build the full URL
-	fullURL := fmt.Sprintf("%s?%s", s.APIPath, params.Encode())
+	// Encode form data
+	encodedData := formData.Encode()
 
-	// Create HTTP request
-	req, err := http.NewRequest("POST", fullURL, nil)
+	// Log the request for debugging
+	fmt.Printf("📤 Sending OTP via WhatsApp to: %s (cleaned: %s) | Route: wp\n", phoneNumber, destination)
+	fmt.Printf("🔗 API URL: %s\n", s.APIPath)
+	fmt.Printf("📦 Form Data: %s\n", encodedData)
+	fmt.Printf("💬 Message Preview: %s\n", otp)
+
+	// Create HTTP request with form data in body
+	req, err := http.NewRequest("POST", s.APIPath, strings.NewReader(encodedData))
 	if err != nil {
+		fmt.Printf("❌ Failed to create HTTP request: %v\n", err)
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	// Set headers
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	// Set headers (application/x-www-form-urlencoded is required)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(encodedData)))
 	req.Header.Set("User-Agent", "Barrim-OTP-Service/1.0")
-
-	// Log the request for debugging
-	fmt.Printf("📤 Sending OTP via WhatsApp to: %s | Route: wp | OTP: %s\n", phoneNumber, otp)
-	fmt.Printf("🔗 API URL: %s\n", fullURL)
 
 	// Send the request
 	resp, err := s.Client.Do(req)
 	if err != nil {
-		fmt.Printf("❌ SMS Request Error: %v\n", err)
-		return fmt.Errorf("failed to send SMS request: %w", err)
+		fmt.Printf("❌ WhatsApp Request Error: %v\n", err)
+		return fmt.Errorf("failed to send WhatsApp request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -88,12 +92,12 @@ func (s *SMSService) SendOTP(phoneNumber, otp string) error {
 	}
 
 	// Log the response for debugging
-	fmt.Printf("📥 SMS API Response Status: %d\n", resp.StatusCode)
-	fmt.Printf("📥 SMS API Response Body: %s\n", string(body))
+	fmt.Printf("📥 WhatsApp API Response Status: %d\n", resp.StatusCode)
+	fmt.Printf("📥 WhatsApp API Response Body: %s\n", string(body))
 
 	// Check HTTP status
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("SMS API returned status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("WhatsApp API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Parse response
@@ -127,9 +131,12 @@ func SendOTPViaSMS(phone string, otp string) error {
 		phone = "+" + phone
 	}
 
+	// Create a formatted message for the OTP
+	message := fmt.Sprintf("Your Barrim verification code is: %s. This code will expire in 10 minutes.", otp)
+
 	// Create SMS service and send OTP
 	smsService := NewSMSService()
-	return smsService.SendOTP(phone, otp)
+	return smsService.SendOTP(phone, message)
 }
 
 // SendOTPViaSMSWithMessage sends an OTP with a custom message
