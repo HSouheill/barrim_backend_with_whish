@@ -16,7 +16,8 @@ func RegisterCompanyRoutes(e *echo.Echo, companyController *controllers.CompanyC
 	// Subscription routes
 	companyGroup.GET("/subscription-plans", subscriptionController.GetCompanySubscriptionPlans)
 	companyGroup.POST("/subscription/:branchId/request", companySubscriptionController.CreateBranchSubscriptionRequest)
-	companyGroup.GET("/subscription/request/:branchId/status", subscriptionController.GetCompanySubscriptionRequestStatus)
+	companyGroup.GET("/subscription/request/:branchId/status", companySubscriptionController.GetBranchSubscriptionRequestStatus)
+	companyGroup.POST("/subscription/:branchId/verify-activate", companySubscriptionController.VerifyAndActivateBranchSubscription)
 	companyGroup.POST("/subscription/:branchId/cancel", subscriptionController.CancelCompanySubscription)
 	companyGroup.GET("/subscription/:branchId/remaining-time", companySubscriptionController.GetBranchSubscriptionRemainingTime)
 

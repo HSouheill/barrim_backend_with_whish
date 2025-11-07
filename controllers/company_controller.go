@@ -2915,6 +2915,120 @@ func (cc *CompanyController) GetCompanyBranchSponsorshipRemainingTime(c echo.Con
 		})
 	}
 
+	// First, check if there's a pending sponsorship subscription request that needs verification
+	sponsorshipRequestCollection := config.GetCollection(cc.DB, "sponsorship_subscription_requests")
+	var sponsorshipRequest models.SponsorshipSubscriptionRequest
+	err = sponsorshipRequestCollection.FindOne(ctx, bson.M{
+		"entityType":    "company_branch",
+		"entityId":      branchObjectID,
+		"paymentStatus": "pending",
+		"status":        bson.M{"$in": []string{"pending", "pending_payment"}},
+	}, options.FindOne().SetSort(bson.D{{"requestedAt", -1}})).Decode(&sponsorshipRequest)
+
+	// If payment status is pending, automatically verify payment and activate if successful
+	if err == nil && sponsorshipRequest.ExternalID != 0 {
+		log.Printf("🔄 Auto-verifying sponsorship payment for request: %s (externalId: %d)", sponsorshipRequest.ID.Hex(), sponsorshipRequest.ExternalID)
+
+		// Initialize Whish service and verify payment status
+		whishService := services.NewWhishService()
+		status, phoneNumber, err := whishService.GetPaymentStatus("USD", sponsorshipRequest.ExternalID)
+		if err != nil {
+			log.Printf("⚠️  Failed to auto-verify sponsorship payment status: %v", err)
+			// Continue to check for existing subscription even if verification fails
+		} else {
+			log.Printf("📊 Auto-verification result: status=%s, phone=%s", status, phoneNumber)
+
+			// If payment is successful, activate the sponsorship subscription
+			if status == "success" {
+				log.Printf("✅ Sponsorship payment verified as successful, activating subscription...")
+
+				// Check if subscription already exists
+				subscriptionCollection := config.GetCollection(cc.DB, "sponsorship_subscriptions")
+				var existingSubscription models.SponsorshipSubscription
+				err = subscriptionCollection.FindOne(ctx, bson.M{
+					"entityType": "company_branch",
+					"entityId":   branchObjectID,
+					"status":     "active",
+				}).Decode(&existingSubscription)
+
+				if err != nil {
+					// No active subscription exists, trigger the callback handler to activate it
+					// We'll manually call the activation logic
+					dbName := os.Getenv("DB_NAME")
+					if dbName == "" {
+						dbName = "barrim"
+					}
+					db := cc.DB.Database(dbName)
+					sponsorshipSubscriptionController := NewSponsorshipSubscriptionController(db)
+
+					// Get sponsorship details
+					sponsorshipCollection := config.GetCollection(cc.DB, "sponsorships")
+					var sponsorship models.Sponsorship
+					err = sponsorshipCollection.FindOne(ctx, bson.M{"_id": sponsorshipRequest.SponsorshipID}).Decode(&sponsorship)
+					if err == nil {
+						// Add sponsorship income to admin wallet
+						err = sponsorshipSubscriptionController.addSponsorshipIncomeToAdminWallet(
+							ctx,
+							sponsorship.Price,
+							sponsorshipRequest.SponsorshipID,
+							fmt.Sprintf("%s - %s", sponsorship.Title, sponsorshipRequest.EntityName),
+						)
+						if err != nil {
+							log.Printf("Failed to add sponsorship income to admin wallet: %v", err)
+						}
+
+						// Create active subscription
+						err = sponsorshipSubscriptionController.createActiveSubscription(ctx, sponsorshipRequest)
+						if err != nil {
+							log.Printf("❌ Failed to auto-activate sponsorship subscription: %v", err)
+						} else {
+							log.Printf("✅ Sponsorship subscription auto-activated successfully")
+
+							// Update entity sponsorship status to active
+							err = sponsorshipSubscriptionController.updateEntitySponsorshipStatus(ctx, sponsorshipRequest.EntityType, sponsorshipRequest.EntityID, true)
+							if err != nil {
+								log.Printf("Failed to update entity sponsorship status: %v", err)
+							}
+
+							// Update request status
+							sponsorshipRequestCollection.UpdateOne(ctx,
+								bson.M{"_id": sponsorshipRequest.ID},
+								bson.M{"$set": bson.M{
+									"paymentStatus": "success",
+									"status":        "approved",
+									"adminApproved": true,
+									"approvedAt":    time.Now(),
+									"paidAt":        time.Now(),
+									"processedAt":   time.Now(),
+								}})
+						}
+					}
+				} else {
+					log.Printf("ℹ️  Sponsorship subscription already active, updating request status")
+					// Update request status even if subscription already exists
+					sponsorshipRequestCollection.UpdateOne(ctx,
+						bson.M{"_id": sponsorshipRequest.ID},
+						bson.M{"$set": bson.M{
+							"paymentStatus": "success",
+							"status":        "approved",
+							"adminApproved": true,
+							"paidAt":        time.Now(),
+							"processedAt":   time.Now(),
+						}})
+				}
+			} else if status == "failed" {
+				// Update request status to failed
+				sponsorshipRequestCollection.UpdateOne(ctx,
+					bson.M{"_id": sponsorshipRequest.ID},
+					bson.M{"$set": bson.M{
+						"paymentStatus": "failed",
+						"status":        "failed",
+						"processedAt":   time.Now(),
+					}})
+			}
+		}
+	}
+
 	// Find active sponsorship subscription for this company branch
 	collection := config.GetCollection(cc.DB, "sponsorship_subscriptions")
 	var subscription models.SponsorshipSubscription

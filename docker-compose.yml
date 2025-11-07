@@ -42,7 +42,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     container_name: barrim-backend-dev
     restart: unless-stopped
     ports:
@@ -57,10 +57,10 @@ services:
       - PORT=8080
       - JWT_SECRET=7ec4819cc593eabb50e9a22859f269f5fb40e4fa32fcac86b4ff09e971b9cab57a250f9cf698ae779338ac5dc23b3de4a8b821be1114288b4d4ffccdfe5d7e1e8da2c99f7c93206c7184f9bbeb8a10790f9f78c2ab353de1b70bf2112828a5444df0564b2de5fc19ffb76ca70a8333ceb63bffc60e2e87e04bbe6cef11294513
       - ENV=development
-      - WHISH_ENV=${WHISH_ENV:-testing}
-      - WHISH_CHANNEL=${WHISH_CHANNEL}
-      - WHISH_SECRET=${WHISH_SECRET}
-      - WHISH_WEBSITE_URL=${WHISH_WEBSITE_URL}
+      - WHISH_ENV=${WHISH_ENV:-production}
+      - WHISH_CHANNEL=${WHISH_CHANNEL:-10196975}
+      - WHISH_SECRET=${WHISH_SECRET:-024709627da343afbcd5278a5fea819e}
+      - WHISH_WEBSITE_URL=${WHISH_WEBSITE_URL:-https://barrim.com}
       - BASE_URL=${BASE_URL:-http://localhost:8080}
       - APP_URL=${APP_URL:-http://localhost:8080}
     depends_on:

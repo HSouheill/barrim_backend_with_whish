@@ -51,7 +51,7 @@ func (s *SMSService) SendOTP(phoneNumber, otp string) error {
 	params.Set("senderid", s.SenderID)
 	params.Set("destination", phoneNumber)
 	params.Set("message", otp)
-	params.Set("route", "wp")
+	params.Set("route", "sms") // Changed from "wp" to "sms" for regular SMS
 	params.Set("template", "otp")
 	params.Set("variables", otp)
 
@@ -68,9 +68,14 @@ func (s *SMSService) SendOTP(phoneNumber, otp string) error {
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	req.Header.Set("User-Agent", "Barrim-OTP-Service/1.0")
 
+	// Log the request for debugging
+	fmt.Printf("📤 Sending SMS to: %s | Route: sms | OTP: %s\n", phoneNumber, otp)
+	fmt.Printf("🔗 API URL: %s\n", fullURL)
+
 	// Send the request
 	resp, err := s.Client.Do(req)
 	if err != nil {
+		fmt.Printf("❌ SMS Request Error: %v\n", err)
 		return fmt.Errorf("failed to send SMS request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -78,8 +83,13 @@ func (s *SMSService) SendOTP(phoneNumber, otp string) error {
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		fmt.Printf("❌ Failed to read response: %v\n", err)
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
+
+	// Log the response for debugging
+	fmt.Printf("📥 SMS API Response Status: %d\n", resp.StatusCode)
+	fmt.Printf("📥 SMS API Response Body: %s\n", string(body))
 
 	// Check HTTP status
 	if resp.StatusCode != http.StatusOK {

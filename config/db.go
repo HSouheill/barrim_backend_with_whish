@@ -17,7 +17,9 @@ func ConnectDB() *mongo.Client {
 	// Set client options
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
-		mongoURI = "mongodb://admin:9Z9ZBarrim@mongodb:27017/?authSource=admin"
+		// Default to localhost for local development
+		// In Docker, this will be overridden by the MONGO_URI environment variable
+		mongoURI = "mongodb://admin:9Z9ZBarrim@localhost:27017/?authSource=admin"
 	}
 
 	clientOptions := options.Client().ApplyURI(mongoURI)

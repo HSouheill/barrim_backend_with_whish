@@ -1840,6 +1840,77 @@ func (sc *WholesalerBranchSubscriptionController) GetBranchSubscriptionRemaining
 		})
 	}
 
+	// First, check if there's a pending subscription request that needs verification
+	subscriptionRequestsCollection := sc.DB.Collection("wholesaler_branch_subscription_requests")
+	var subscriptionRequest models.WholesalerBranchSubscriptionRequest
+	err = subscriptionRequestsCollection.FindOne(ctx,
+		bson.M{"branchId": branchObjectID, "paymentStatus": "pending", "status": bson.M{"$in": []string{"pending", "pending_payment"}}},
+		options.FindOne().SetSort(bson.D{{"requestedAt", -1}}),
+	).Decode(&subscriptionRequest)
+
+	// If payment status is pending, automatically verify payment and activate if successful
+	if err == nil && subscriptionRequest.ExternalID != 0 {
+		log.Printf("🔄 Auto-verifying wholesaler branch subscription payment for request: %s (externalId: %d)", subscriptionRequest.ID.Hex(), subscriptionRequest.ExternalID)
+
+		// Initialize Whish service and verify payment status
+		whishService := services.NewWhishService()
+		status, phoneNumber, err := whishService.GetPaymentStatus("USD", subscriptionRequest.ExternalID)
+		if err != nil {
+			log.Printf("⚠️  Failed to auto-verify payment status: %v", err)
+			// Continue to check for existing subscription even if verification fails
+		} else {
+			log.Printf("📊 Auto-verification result: status=%s, phone=%s", status, phoneNumber)
+
+			// If payment is successful, activate the subscription
+			if status == "success" {
+				log.Printf("✅ Payment verified as successful, activating subscription...")
+
+				// Check if subscription already exists
+				subscriptionsCollection := sc.DB.Collection("wholesaler_branch_subscriptions")
+				var existingSubscription models.WholesalerBranchSubscription
+				err = subscriptionsCollection.FindOne(ctx, bson.M{
+					"branchId": branchObjectID,
+					"status":   "active",
+				}).Decode(&existingSubscription)
+
+				if err != nil {
+					// No active subscription exists, activate it
+					err = sc.activateWholesalerBranchSubscription(ctx, subscriptionRequest, phoneNumber)
+					if err != nil {
+						log.Printf("❌ Failed to auto-activate subscription: %v", err)
+					} else {
+						log.Printf("✅ Subscription auto-activated successfully")
+						// Reload the subscription request to get updated status
+						err = subscriptionRequestsCollection.FindOne(ctx, bson.M{"_id": subscriptionRequest.ID}).Decode(&subscriptionRequest)
+						if err != nil {
+							log.Printf("Warning: Failed to reload subscription request after activation: %v", err)
+						}
+					}
+				} else {
+					log.Printf("ℹ️  Subscription already active, updating request status")
+					// Update request status even if subscription already exists
+					subscriptionRequestsCollection.UpdateOne(ctx,
+						bson.M{"_id": subscriptionRequest.ID},
+						bson.M{"$set": bson.M{
+							"paymentStatus": "success",
+							"status":        "active",
+							"paidAt":        time.Now(),
+							"processedAt":   time.Now(),
+						}})
+				}
+			} else if status == "failed" {
+				// Update request status to failed
+				subscriptionRequestsCollection.UpdateOne(ctx,
+					bson.M{"_id": subscriptionRequest.ID},
+					bson.M{"$set": bson.M{
+						"paymentStatus": "failed",
+						"status":        "failed",
+						"processedAt":   time.Now(),
+					}})
+			}
+		}
+	}
+
 	subscriptionsCollection := sc.DB.Collection("wholesaler_branch_subscriptions")
 	var subscription models.WholesalerBranchSubscription
 	err = subscriptionsCollection.FindOne(ctx, bson.M{"branchId": branchObjectID, "status": "active", "endDate": bson.M{"$gt": time.Now()}}).Decode(&subscription)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/HSouheill/barrim_backend/models"
+	"github.com/HSouheill/barrim_backend/services"
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -643,6 +644,112 @@ func (ssc *SponsorshipSubscriptionController) GetTimeRemainingForWholesalerBranc
 		})
 	}
 
+	// First, check if there's a pending sponsorship subscription request that needs verification
+	sponsorshipRequestCollection := ssc.DB.Collection("sponsorship_subscription_requests")
+	var sponsorshipRequest models.SponsorshipSubscriptionRequest
+	err = sponsorshipRequestCollection.FindOne(context.Background(), bson.M{
+		"entityType":    "wholesaler_branch",
+		"entityId":      objectID,
+		"paymentStatus": "pending",
+		"status":        bson.M{"$in": []string{"pending", "pending_payment"}},
+	}, options.FindOne().SetSort(bson.D{{"requestedAt", -1}})).Decode(&sponsorshipRequest)
+
+	// If payment status is pending, automatically verify payment and activate if successful
+	if err == nil && sponsorshipRequest.ExternalID != 0 {
+		log.Printf("🔄 Auto-verifying wholesaler branch sponsorship payment for request: %s (externalId: %d)", sponsorshipRequest.ID.Hex(), sponsorshipRequest.ExternalID)
+
+		// Initialize Whish service and verify payment status
+		whishService := services.NewWhishService()
+		status, phoneNumber, err := whishService.GetPaymentStatus("USD", sponsorshipRequest.ExternalID)
+		if err != nil {
+			log.Printf("⚠️  Failed to auto-verify sponsorship payment status: %v", err)
+			// Continue to check for existing subscription even if verification fails
+		} else {
+			log.Printf("📊 Auto-verification result: status=%s, phone=%s", status, phoneNumber)
+
+			// If payment is successful, activate the sponsorship subscription
+			if status == "success" {
+				log.Printf("✅ Sponsorship payment verified as successful, activating subscription...")
+
+				// Check if subscription already exists
+				subscriptionCollection := ssc.DB.Collection("sponsorship_subscriptions")
+				var existingSubscription models.SponsorshipSubscription
+				err = subscriptionCollection.FindOne(context.Background(), bson.M{
+					"entityType": "wholesaler_branch",
+					"entityId":   objectID,
+					"status":     "active",
+				}).Decode(&existingSubscription)
+
+				if err != nil {
+					// No active subscription exists, activate it
+					// Get sponsorship details
+					sponsorshipCollection := ssc.DB.Collection("sponsorships")
+					var sponsorship models.Sponsorship
+					err = sponsorshipCollection.FindOne(context.Background(), bson.M{"_id": sponsorshipRequest.SponsorshipID}).Decode(&sponsorship)
+					if err == nil {
+						// Add sponsorship income to admin wallet
+						err = ssc.addSponsorshipIncomeToAdminWallet(
+							context.Background(),
+							sponsorship.Price,
+							sponsorshipRequest.SponsorshipID,
+							fmt.Sprintf("%s - %s", sponsorship.Title, sponsorshipRequest.EntityName),
+						)
+						if err != nil {
+							log.Printf("Failed to add sponsorship income to admin wallet: %v", err)
+						}
+
+						// Create active subscription
+						err = ssc.createActiveSubscription(context.Background(), sponsorshipRequest)
+						if err != nil {
+							log.Printf("❌ Failed to auto-activate sponsorship subscription: %v", err)
+						} else {
+							log.Printf("✅ Sponsorship subscription auto-activated successfully")
+
+							// Update entity sponsorship status to active
+							err = ssc.updateEntitySponsorshipStatus(context.Background(), sponsorshipRequest.EntityType, sponsorshipRequest.EntityID, true)
+							if err != nil {
+								log.Printf("Failed to update entity sponsorship status: %v", err)
+							}
+
+							// Update request status
+							sponsorshipRequestCollection.UpdateOne(context.Background(),
+								bson.M{"_id": sponsorshipRequest.ID},
+								bson.M{"$set": bson.M{
+									"paymentStatus": "success",
+									"status":        "approved",
+									"adminApproved": true,
+									"approvedAt":    time.Now(),
+									"paidAt":        time.Now(),
+									"processedAt":   time.Now(),
+								}})
+						}
+					}
+				} else {
+					log.Printf("ℹ️  Sponsorship subscription already active, updating request status")
+					// Update request status even if subscription already exists
+					sponsorshipRequestCollection.UpdateOne(context.Background(),
+						bson.M{"_id": sponsorshipRequest.ID},
+						bson.M{"$set": bson.M{
+							"paymentStatus": "success",
+							"status":        "approved",
+							"adminApproved": true,
+							"paidAt":        time.Now(),
+							"processedAt":   time.Now(),
+						}})
+				}
+			} else if status == "failed" {
+				// Update request status to failed
+				sponsorshipRequestCollection.UpdateOne(context.Background(),
+					bson.M{"_id": sponsorshipRequest.ID},
+					bson.M{"$set": bson.M{
+						"paymentStatus": "failed",
+						"status":        "failed",
+						"processedAt":   time.Now(),
+					}})
+			}
+		}
+	}
+
 	// Find active subscription for this wholesaler branch
 	collection := ssc.DB.Collection("sponsorship_subscriptions")
 	var subscription models.SponsorshipSubscription
@@ -745,11 +852,117 @@ func (ssc *SponsorshipSubscriptionController) GetTimeRemainingForServiceProvider
 		})
 	}
 
+	// First, check if there's a pending sponsorship subscription request that needs verification
+	sponsorshipRequestCollection := ssc.DB.Collection("sponsorship_subscription_requests")
+	var sponsorshipRequest models.SponsorshipSubscriptionRequest
+	err = sponsorshipRequestCollection.FindOne(context.Background(), bson.M{
+		"entityType":    bson.M{"$in": []string{"service_provider", "serviceProvider"}},
+		"entityId":      objectID,
+		"paymentStatus": "pending",
+		"status":        bson.M{"$in": []string{"pending", "pending_payment"}},
+	}, options.FindOne().SetSort(bson.D{{"requestedAt", -1}})).Decode(&sponsorshipRequest)
+
+	// If payment status is pending, automatically verify payment and activate if successful
+	if err == nil && sponsorshipRequest.ExternalID != 0 {
+		log.Printf("🔄 Auto-verifying service provider sponsorship payment for request: %s (externalId: %d)", sponsorshipRequest.ID.Hex(), sponsorshipRequest.ExternalID)
+
+		// Initialize Whish service and verify payment status
+		whishService := services.NewWhishService()
+		status, phoneNumber, err := whishService.GetPaymentStatus("USD", sponsorshipRequest.ExternalID)
+		if err != nil {
+			log.Printf("⚠️  Failed to auto-verify sponsorship payment status: %v", err)
+			// Continue to check for existing subscription even if verification fails
+		} else {
+			log.Printf("📊 Auto-verification result: status=%s, phone=%s", status, phoneNumber)
+
+			// If payment is successful, activate the sponsorship subscription
+			if status == "success" {
+				log.Printf("✅ Sponsorship payment verified as successful, activating subscription...")
+
+				// Check if subscription already exists
+				subscriptionCollection := ssc.DB.Collection("sponsorship_subscriptions")
+				var existingSubscription models.SponsorshipSubscription
+				err = subscriptionCollection.FindOne(context.Background(), bson.M{
+					"entityType": bson.M{"$in": []string{"service_provider", "serviceProvider"}},
+					"entityId":   objectID,
+					"status":     "active",
+				}).Decode(&existingSubscription)
+
+				if err != nil {
+					// No active subscription exists, activate it
+					// Get sponsorship details
+					sponsorshipCollection := ssc.DB.Collection("sponsorships")
+					var sponsorship models.Sponsorship
+					err = sponsorshipCollection.FindOne(context.Background(), bson.M{"_id": sponsorshipRequest.SponsorshipID}).Decode(&sponsorship)
+					if err == nil {
+						// Add sponsorship income to admin wallet
+						err = ssc.addSponsorshipIncomeToAdminWallet(
+							context.Background(),
+							sponsorship.Price,
+							sponsorshipRequest.SponsorshipID,
+							fmt.Sprintf("%s - %s", sponsorship.Title, sponsorshipRequest.EntityName),
+						)
+						if err != nil {
+							log.Printf("Failed to add sponsorship income to admin wallet: %v", err)
+						}
+
+						// Create active subscription
+						err = ssc.createActiveSubscription(context.Background(), sponsorshipRequest)
+						if err != nil {
+							log.Printf("❌ Failed to auto-activate sponsorship subscription: %v", err)
+						} else {
+							log.Printf("✅ Sponsorship subscription auto-activated successfully")
+
+							// Update entity sponsorship status to active
+							err = ssc.updateEntitySponsorshipStatus(context.Background(), sponsorshipRequest.EntityType, sponsorshipRequest.EntityID, true)
+							if err != nil {
+								log.Printf("Failed to update entity sponsorship status: %v", err)
+							}
+
+							// Update request status
+							sponsorshipRequestCollection.UpdateOne(context.Background(),
+								bson.M{"_id": sponsorshipRequest.ID},
+								bson.M{"$set": bson.M{
+									"paymentStatus": "success",
+									"status":        "approved",
+									"adminApproved": true,
+									"approvedAt":    time.Now(),
+									"paidAt":        time.Now(),
+									"processedAt":   time.Now(),
+								}})
+						}
+					}
+				} else {
+					log.Printf("ℹ️  Sponsorship subscription already active, updating request status")
+					// Update request status even if subscription already exists
+					sponsorshipRequestCollection.UpdateOne(context.Background(),
+						bson.M{"_id": sponsorshipRequest.ID},
+						bson.M{"$set": bson.M{
+							"paymentStatus": "success",
+							"status":        "approved",
+							"adminApproved": true,
+							"paidAt":        time.Now(),
+							"processedAt":   time.Now(),
+						}})
+				}
+			} else if status == "failed" {
+				// Update request status to failed
+				sponsorshipRequestCollection.UpdateOne(context.Background(),
+					bson.M{"_id": sponsorshipRequest.ID},
+					bson.M{"$set": bson.M{
+						"paymentStatus": "failed",
+						"status":        "failed",
+						"processedAt":   time.Now(),
+					}})
+			}
+		}
+	}
+
 	// Find active subscription for this service provider
 	collection := ssc.DB.Collection("sponsorship_subscriptions")
 	var subscription models.SponsorshipSubscription
 	err = collection.FindOne(context.Background(), bson.M{
-		"entityType": "service_provider",
+		"entityType": bson.M{"$in": []string{"service_provider", "serviceProvider"}},
 		"entityId":   objectID,
 		"status":     "active",
 	}).Decode(&subscription)
